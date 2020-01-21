@@ -1,7 +1,8 @@
-from paramiko import SSHClient, AutoAddPolicy
-from paramiko.hostkeys import HostKeys
 from getpass import getpass
 from typing import List
+
+from paramiko import SSHClient, AutoAddPolicy
+from paramiko.hostkeys import HostKeys
 
 
 class _RePyError(Exception):
@@ -9,23 +10,24 @@ class _RePyError(Exception):
 
 
 class _RePyClient(object):
-    def __init__(self, user, host, pswd, port, sudo):
+    def __init__(self, user, host, pswd, port, sudo, sudopass):
         self.user: str = user
         self.host: str = host
         self.pswd: str = pswd
         self.sudo: bool = sudo
         self.port: int = port
+        self.sudopass: str = sudopass
 
     def __repr__(self):
-        return {'user': self.user, 'host': self.host, 'pswd': self.pswd, 'port': self.port, 'sudo': self.sudo}
+        return str({'user': self.user, 'host': self.host, 'pswd': self.pswd, 'port': self.port, 'sudo': self.sudo})
 
     def __str__(self):
         return f'Client(user:{self.user}, host:{self.host}, pswd:{self.pswd}, port:{self.port}, sudo:{self.sudo})'
 
 
 class SSH(_RePyClient, _RePyError):
-    def __init__(self, user, host, pswd='', port=22, sudo=False):
-        super().__init__(user, host, pswd, port, sudo)
+    def __init__(self, user, host, pswd='', port=22, sudo=False, sudopass=''):
+        super().__init__(user, host, pswd, port, sudo, sudopass)
         self._ssh = SSHClient()
         self._ssh.set_missing_host_key_policy(AutoAddPolicy)
         self._ssh.load_system_host_keys()
@@ -42,14 +44,10 @@ class SSH(_RePyClient, _RePyError):
         if isinstance(commands, list):
             for file in commands:
                 command = self.sudoer(f'python <<EOF\n \n{open(file).read()} \nEOF')
-                stdin, stdout, stderr = self._ssh.exec_command(command=command, get_pty=True)
-                stdin.close()
-                return stdout.read()
+                return self.pseudo(command)
         elif isinstance(commands, str):
             command = self.sudoer(f'python <<EOF\n \n{commands} \nEOF')
-            stdin, stdout, stderr = self._ssh.exec_command(command=command, get_pty=True)
-            stdin.close()
-            return stdout.read()
+            return self.pseudo(command)
         else:
             raise _RePyError('SSH.pyxecute only accepts a list of files to read and execute or a single python '
                              'command string.')
@@ -58,20 +56,48 @@ class SSH(_RePyClient, _RePyError):
         if isinstance(files, list):
             for file in files:
                 command = self.sudoer(f'{open(file).read()}')
-                stdin, stdout, stderr = self._ssh.exec_command(command=command, get_pty=True)
-                stdin.close()
-                return stdout.read()
+                return self.pseudo(command)
         elif isinstance(files, str):
             command = self.sudoer(files)
-            stdin, stdout, stderr = self._ssh.exec_command(command=command, get_pty=True)
-            stdin.close()
-            return stdout.read()
+            return self.pseudo(command)
         else:
             raise _RePyError('SSH.execute only accepts a list of files to read and execute ore a single shell command '
                              'string')
 
     def sudoer(self, text: str) -> str:
         if self.sudo:
-            return f'sudo {text}'
+            return f"sudo -S -p '' {text}"
         else:
             return text
+
+    def pseudo(self, command):
+        stdin, stdout, stderr = self._ssh.exec_command(command=command, get_pty=True)
+        if self.sudo:
+            stdin.write(self.sudopass + '\n')
+            stdin.flush()
+        stdin.close()
+        return stdout.read().decode('utf8').replace(self.sudopass, '')
+
+
+class SFTP(_RePyClient, _RePyError):
+    def __init__(self, user, host, pswd='', port=22, sudo=False, sudopass=''):
+        super().__init__(user, host, pswd, port, sudo, sudopass)
+        self._ssh = SSHClient()
+        self._ssh.set_missing_host_key_policy(AutoAddPolicy)
+        self._ssh.load_system_host_keys()
+
+        if not HostKeys().lookup(self.host):
+            if not self.pswd:
+                getpass(f'No key found for {self.user}@{self.host}, please enter password: [WILL NOT ECHO]')
+            self.ssh_client = self._ssh.connect(hostname=self.host, username=self.user, password=self.pswd,
+                                                port=self.port)
+        else:
+            self.ssh_client = self._ssh.connect(hostname=self.host, username=self.user, port=self.port)
+
+        self._sftp = self._ssh.open_sftp()
+
+    def get_file(self, rem_path, lcl_path):
+        self._sftp.get(rem_path, lcl_path)
+
+    def put_file(self, rem_path, lcl_path):
+        self._sftp.put(lcl_path, rem_path)
