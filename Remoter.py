@@ -17,12 +17,14 @@ class _RePyClient(object):
         self.sudo: bool = sudo
         self.port: int = port
         self.sudopass: str = sudopass
+        self.pyver: str = ''
 
     def __repr__(self):
-        return str({'user': self.user, 'host': self.host, 'pswd': self.pswd, 'port': self.port, 'sudo': self.sudo})
+        return str({'user': self.user, 'host': self.host, 'pswd': self.pswd, 'port': self.port, 'sudo': self.sudo,
+                    'python_version': self.pyver})
 
     def __str__(self):
-        return f'Client(user:{self.user}, host:{self.host}, pswd:{self.pswd}, port:{self.port}, sudo:{self.sudo})'
+        return f'Client(user:{self.user}, host:{self.host}, pswd:{self.pswd}, port:{self.port}, sudo:{self.sudo}, python_version:{self.pyver})'
 
 
 class SSH(_RePyClient, _RePyError):
@@ -39,6 +41,10 @@ class SSH(_RePyClient, _RePyError):
                                                 port=self.port)
         else:
             self.ssh_client = self._ssh.connect(hostname=self.host, username=self.user, port=self.port)
+
+        self.pyver = self.execute('python --version').strip()
+        if not self.pyver:
+            raise _RePyError('Python is not accessible on the remote host. Check if it is installed.')
 
     def pyxecute(self, commands: List[str] or str) -> str:
         if isinstance(commands, list):
@@ -99,5 +105,5 @@ class SFTP(_RePyClient, _RePyError):
     def get_file(self, rem_path, lcl_path):
         self._sftp.get(rem_path, lcl_path)
 
-    def put_file(self, rem_path, lcl_path):
+    def put_file(self, lcl_path, rem_path):
         self._sftp.put(lcl_path, rem_path)
